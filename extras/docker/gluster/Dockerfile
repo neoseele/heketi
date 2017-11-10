@@ -25,6 +25,7 @@ RUN yum --setopt=tsflags=nodocs -q -y install \
   iproute \
   sudo \
   xfsprogs \
+  e2fsprogs \
   centos-release-gluster \
   ntp \
   epel-release \

@@ -75,10 +75,10 @@ func (s *SshExecutor) BrickCreate(host string,
 			s.brickName(brick.Name)),
 
 		// Format
-		fmt.Sprintf("mkfs.xfs -i size=512 -n size=8192 %v", s.devnode(brick)),
+		fmt.Sprintf("mkfs.ext4 %v", s.devnode(brick)),
 
 		// Fstab
-		fmt.Sprintf("echo \"%v %v xfs rw,inode64,noatime,nouuid 1 2\" | tee -a %v > /dev/null ",
+		fmt.Sprintf("echo \"%v %v ext4 rw,inode64,noatime,nouuid 1 2\" | tee -a %v > /dev/null ",
 			s.devnode(brick),
 			mountpoint,
 			s.Fstab),
