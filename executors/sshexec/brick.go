@@ -78,13 +78,13 @@ func (s *SshExecutor) BrickCreate(host string,
 		fmt.Sprintf("mkfs.ext4 %v", s.devnode(brick)),
 
 		// Fstab
-		fmt.Sprintf("echo \"%v %v ext4 rw,noatime,nouuid 1 2\" | tee -a %v > /dev/null ",
+		fmt.Sprintf("echo \"%v %v ext4 rw,noatime 1 2\" | tee -a %v > /dev/null ",
 			s.devnode(brick),
 			mountpoint,
 			s.Fstab),
 
 		// Mount
-		fmt.Sprintf("mount -o rw,noatime,nouuid %v %v", s.devnode(brick), mountpoint),
+		fmt.Sprintf("mount -o rw,noatime %v %v", s.devnode(brick), mountpoint),
 
 		// Create a directory inside the formated volume for GlusterFS
 		fmt.Sprintf("mkdir %v/brick", mountpoint),
