@@ -252,6 +252,145 @@ func TestPeerProbe(t *testing.T) {
 	tests.Assert(t, probe_called == true)
 }
 
+func TestPeerProbeFirstNodeDown(t *testing.T) {
+	tmpfile := tests.Tempfile()
+	defer os.Remove(tmpfile)
+
+	// Create the app
+	app := NewTestApp(tmpfile)
+	defer app.Close()
+	router := mux.NewRouter()
+	app.SetRoutes(router)
+
+	// Setup the server
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	// ClusterCreate JSON Request
+	request := []byte(`{
+    }`)
+
+	// Post nothing
+	r, err := http.Post(ts.URL+"/clusters", "application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusCreated)
+	tests.Assert(t, r.Header.Get("Content-Type") == "application/json; charset=UTF-8")
+
+	// Read cluster information
+	var clusterinfo api.ClusterInfoResponse
+	err = utils.GetJsonFromResponse(r, &clusterinfo)
+	tests.Assert(t, err == nil)
+
+	// Override to return glusterd down
+	app.xo.MockGlusterdCheck = func(host string) error {
+		return logger.LogError("Glusterd is down")
+	}
+
+	// Create node on this cluster
+	request = []byte(`{
+		"cluster" : "` + clusterinfo.Id + `",
+		"hostnames" : {
+			"storage" : [ "storage0.hostname.com" ],
+			"manage" : [ "manage0.hostname.com"  ]
+		},
+		"zone" : 1
+    }`)
+
+	// Create node
+	r, err = http.Post(ts.URL+"/nodes", "application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusBadRequest)
+	_, err = r.Location()
+	tests.Assert(t, err != nil)
+
+}
+
+func TestPeerProbeNewNodeDown(t *testing.T) {
+	tmpfile := tests.Tempfile()
+	defer os.Remove(tmpfile)
+
+	// Create the app
+	app := NewTestApp(tmpfile)
+	defer app.Close()
+	router := mux.NewRouter()
+	app.SetRoutes(router)
+
+	// Setup the server
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	// ClusterCreate JSON Request
+	request := []byte(`{
+    }`)
+
+	// Post nothing
+	r, err := http.Post(ts.URL+"/clusters", "application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusCreated)
+	tests.Assert(t, r.Header.Get("Content-Type") == "application/json; charset=UTF-8")
+
+	// Read cluster information
+	var clusterinfo api.ClusterInfoResponse
+	err = utils.GetJsonFromResponse(r, &clusterinfo)
+	tests.Assert(t, err == nil)
+
+	// Create node on this cluster
+	request = []byte(`{
+		"cluster" : "` + clusterinfo.Id + `",
+		"hostnames" : {
+			"storage" : [ "storage0.hostname.com" ],
+			"manage" : [ "manage0.hostname.com"  ]
+		},
+		"zone" : 1
+    }`)
+
+	// Create node
+	r, err = http.Post(ts.URL+"/nodes", "application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusAccepted)
+	location, err := r.Location()
+	tests.Assert(t, err == nil)
+
+	// Query queue until finished
+	for {
+		r, err = http.Get(location.String())
+		tests.Assert(t, err == nil)
+		tests.Assert(t, r.StatusCode == http.StatusOK)
+		if r.ContentLength <= 0 {
+			time.Sleep(time.Millisecond * 10)
+			continue
+		} else {
+			// Should have node information here
+			tests.Assert(t, r.Header.Get("Content-Type") == "application/json; charset=UTF-8")
+			tests.Assert(t, err == nil)
+			break
+		}
+	}
+
+	// Now add another and fail on existing node doesn't have glusterd running
+	request = []byte(`{
+		"cluster" : "` + clusterinfo.Id + `",
+		"hostnames" : {
+			"storage" : [ "storage1.hostname.com" ],
+			"manage" : [ "manage1.hostname.com"  ]
+		},
+		"zone" : 1
+    }`)
+
+	// Override to return glusterd down
+	app.xo.MockGlusterdCheck = func(host string) error {
+		return logger.LogError("Glusterd is down")
+	}
+
+	// Create node
+	r, err = http.Post(ts.URL+"/nodes", "application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusBadRequest)
+	_, err = r.Location()
+	tests.Assert(t, err != nil)
+
+}
+
 func TestNodeAddDelete(t *testing.T) {
 	tmpfile := tests.Tempfile()
 	defer os.Remove(tmpfile)
@@ -909,7 +1048,11 @@ func TestNodeState(t *testing.T) {
 	tests.Assert(t, c != nil)
 
 	// Create Cluster
-	cluster, err := c.ClusterCreate()
+	cluster_req := &api.ClusterCreateRequest{
+		Block: true,
+		File:  true,
+	}
+	cluster, err := c.ClusterCreate(cluster_req)
 	tests.Assert(t, err == nil)
 
 	// Create Node
@@ -1208,5 +1351,131 @@ func TestNodeState(t *testing.T) {
 	// Now it should be back in the ring
 	tests.Assert(t, len(mockAllocator.clustermap[cluster.Id]) == 1)
 	tests.Assert(t, mockAllocator.clustermap[cluster.Id][0] == device.Id)
+
+}
+
+func TestNodeInfoAfterDelete(t *testing.T) {
+	tmpfile := tests.Tempfile()
+	defer os.Remove(tmpfile)
+
+	// Create the app
+	app := NewTestApp(tmpfile)
+	defer app.Close()
+	router := mux.NewRouter()
+	app.SetRoutes(router)
+
+	// Setup the server
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	// Create mock allocator
+	mockAllocator := NewMockAllocator(app.db)
+	app.allocator = mockAllocator
+
+	// Create a client
+	c := client.NewClientNoAuth(ts.URL)
+	tests.Assert(t, c != nil)
+
+	// Create Cluster
+	cluster_req := &api.ClusterCreateRequest{
+		Block: true,
+		File:  true,
+	}
+	cluster, err := c.ClusterCreate(cluster_req)
+	tests.Assert(t, err == nil)
+
+	// Create Node
+	nodeReq := &api.NodeAddRequest{
+		Zone:      1,
+		ClusterId: cluster.Id,
+	}
+	nodeReq.Hostnames.Manage = sort.StringSlice{"manage.host"}
+	nodeReq.Hostnames.Storage = sort.StringSlice{"storage.host"}
+	node, err := c.NodeAdd(nodeReq)
+	tests.Assert(t, err == nil)
+
+	// Get node information again
+	node, err = c.NodeInfo(node.Id)
+	tests.Assert(t, err == nil)
+	tests.Assert(t, node.State == "online")
+
+	// Set node offline
+	request := []byte(`{
+				"state" : "offline"
+				}`)
+	r, err := http.Post(ts.URL+"/nodes/"+node.Id+"/state",
+		"application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusAccepted)
+
+	location, err := r.Location()
+	tests.Assert(t, err == nil)
+
+	// Query queue until finished
+	for {
+		r, err = http.Get(location.String())
+		tests.Assert(t, err == nil)
+		if r.Header.Get("X-Pending") == "true" {
+			tests.Assert(t, r.StatusCode == http.StatusOK)
+			time.Sleep(time.Millisecond * 10)
+		} else {
+			tests.Assert(t, r.StatusCode == http.StatusNoContent)
+			break
+		}
+	}
+
+	// Check it was removed from the ring
+	tests.Assert(t, len(mockAllocator.clustermap[cluster.Id]) == 0)
+
+	// Get node info
+	node, err = c.NodeInfo(node.Id)
+	tests.Assert(t, err == nil)
+	tests.Assert(t, node.State == "offline")
+
+	// Store node id somewhere before deleting it
+	nodeid := node.Id
+
+	// Now delete node
+	req, err := http.NewRequest("DELETE", ts.URL+"/nodes/"+node.Id, nil)
+	tests.Assert(t, err == nil)
+	r, err = http.DefaultClient.Do(req)
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusAccepted)
+	location, err = r.Location()
+	tests.Assert(t, err == nil)
+
+	// Wait for deletion
+	for {
+		r, err := http.Get(location.String())
+		tests.Assert(t, err == nil)
+		if r.Header.Get("X-Pending") == "true" {
+			tests.Assert(t, r.StatusCode == http.StatusOK)
+			time.Sleep(time.Millisecond * 10)
+			continue
+		} else {
+			tests.Assert(t, r.StatusCode == http.StatusNoContent)
+			break
+		}
+	}
+
+	// Check db to make sure key is removed
+	err = app.db.View(func(tx *bolt.Tx) error {
+		_, err = NewNodeEntryFromId(tx, nodeid)
+		return err
+	})
+	tests.Assert(t, err == ErrNotFound)
+
+	// Get node info
+	node, err = c.NodeInfo(nodeid)
+	tests.Assert(t, err != nil, err)
+
+	// Set node offline
+	request = []byte(`{
+				"state" : "offline"
+				}`)
+	r, err = http.Post(ts.URL+"/nodes/"+nodeid+"/state",
+		"application/json", bytes.NewBuffer(request))
+	tests.Assert(t, err == nil)
+	tests.Assert(t, r.StatusCode == http.StatusNotFound)
 
 }

@@ -11,11 +11,9 @@ ENV GOPATH=$BUILD_HOME/golang
 ENV PATH=$GOPATH/bin:$PATH
 ENV HEKETI_BRANCH="master"
 
-RUN curl https://glide.sh/get | sh
-
 # install dependencies, build and cleanup
 RUN mkdir $BUILD_HOME $GOPATH && \
-    dnf -q -y install golang git && \
+    dnf -q -y install glide golang git && \
     dnf -q -y install make && \
     dnf -q -y clean all && \
     mkdir -p $GOPATH/src/github.com/heketi && \
@@ -25,8 +23,9 @@ RUN mkdir $BUILD_HOME $GOPATH && \
     glide install -v && make && \
     cp heketi /usr/bin/heketi && \
     cp client/cli/go/heketi-cli /usr/bin/heketi-cli && \
+    glide cc && \
     cd && rm -rf $BUILD_HOME && \
-    dnf -q -y remove git golang make && \
+    dnf -q -y remove git glide golang make && \
     dnf -q -y autoremove && \
     dnf -q -y clean all
 

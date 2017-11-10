@@ -97,8 +97,11 @@ class HeketiClient(object):
                 else:
                     return q
 
-    def cluster_create(self):
-        req = self._make_request('POST', '/clusters')
+    def cluster_create(self, cluster_options={}):
+        ''' cluster_options is a dict with cluster creation options:
+            https://github.com/heketi/heketi/wiki/API#cluster_create
+        '''
+        req = self._make_request('POST', '/clusters', cluster_options)
         if req.status_code == requests.codes.created:
             return req.json()
 
@@ -177,6 +180,11 @@ class HeketiClient(object):
             return req.json()
         return req.status_code == requests.codes.ok
         '''
+
+    def device_resync(self, device_id):
+        uri = '/devices/' + device_id + '/resync'
+        req = self._make_request('GET', uri)
+        return req.status_code == requests.codes.NO_CONTENT
 
     def volume_create(self, volume_options={}):
         ''' volume_options is a dict with volume creation options:

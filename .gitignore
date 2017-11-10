@@ -45,8 +45,10 @@ tags
 log
 *.sw?
 *~
+.vscode
+debug
 
 .coverage
 .tox
 *.log
-
+.envrc

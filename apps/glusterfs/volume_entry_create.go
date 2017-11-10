@@ -34,16 +34,29 @@ func (v *VolumeEntry) createVolume(db *bolt.DB,
 	}
 
 	// Create the volume
-	_, err = executor.VolumeCreate(host, vr)
-	if err != nil {
+	if _, err := executor.VolumeCreate(host, vr); err != nil {
 		return err
 	}
 
 	// Get all brick hosts
 	stringset := utils.NewStringSet()
-	for _, brick := range vr.Bricks {
-		stringset.Add(brick.Host)
+	if err := db.View(func(tx *bolt.Tx) error {
+		cluster, err := NewClusterEntryFromId(tx, v.Info.Cluster)
+		if err != nil {
+			return err
+		}
+		for _, nodeId := range cluster.Info.Nodes {
+			node, err := NewNodeEntryFromId(tx, nodeId)
+			if err != nil {
+				return err
+			}
+			stringset.Add(node.StorageHostName())
+		}
+		return err
+	}); err != nil {
+		return err
 	}
+
 	hosts := stringset.Strings()
 	v.Info.Mount.GlusterFS.Hosts = hosts
 

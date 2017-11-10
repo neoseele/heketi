@@ -8,9 +8,18 @@ APP_NAME := heketi
 CLIENT_PKG_NAME := heketi-client
 SHA := $(shell git rev-parse --short HEAD)
 BRANCH := $(subst /,-,$(shell git rev-parse --abbrev-ref HEAD))
-VER := $(shell git describe)
-ARCH := $(shell go env GOARCH)
+VER := $(shell git describe --match='v[0-9].[0-9].[0-9]')
+TAG := $(shell git tag --points-at HEAD --sort=creatordate 'v[0-9].[0-9].[0-9]' | tail -n1)
+GOARCH := $(shell go env GOARCH)
 GOOS := $(shell go env GOOS)
+GOHOSTARCH := $(shell go env GOHOSTARCH)
+GOHOSTOS := $(shell go env GOHOSTOS)
+GOBUILDFLAGS :=
+ifeq ($(GOOS),$(GOHOSTOS))
+ifeq ($(GOARCH),$(GOHOSTARCH))
+  GOBUILDFLAGS :=-i
+endif
+endif
 GLIDEPATH := $(shell command -v glide 2> /dev/null)
 DIR=.
 
@@ -20,7 +29,11 @@ else
 ifeq (master,$(BRANCH))
   VERSION = $(VER)
 else
+ifeq ($(VER),$(TAG))
+  VERSION = $(VER)
+else
   VERSION = $(VER)-$(BRANCH)
+endif
 endif
 endif
 
@@ -32,8 +45,9 @@ EXECUTABLES :=$(APP_NAME)
 # Build Binaries setting main.version and main.build vars
 LDFLAGS :=-ldflags "-X main.HEKETI_VERSION=$(VERSION) -extldflags '-z relro -z now'"
 # Package target
-PACKAGE :=$(DIR)/dist/$(APP_NAME)-$(VERSION).$(GOOS).$(ARCH).tar.gz
-CLIENT_PACKAGE :=$(DIR)/dist/$(APP_NAME)-client-$(VERSION).$(GOOS).$(ARCH).tar.gz
+PACKAGE :=$(DIR)/dist/$(APP_NAME)-$(VERSION).$(GOOS).$(GOARCH).tar.gz
+CLIENT_PACKAGE :=$(DIR)/dist/$(APP_NAME)-client-$(VERSION).$(GOOS).$(GOARCH).tar.gz
+DEPS_TARBALL :=$(DIR)/dist/$(APP_NAME)-deps-$(VERSION).tar.gz
 GOFILES=$(shell go list ./... | grep -v vendor)
 
 .DEFAULT: all
@@ -52,8 +66,8 @@ name:
 package:
 	@echo $(PACKAGE)
 
-heketi: glide.lock vendor
-	go build $(LDFLAGS) -o $(APP_NAME)
+heketi: vendor glide.lock
+	go build $(GOBUILDFLAGS) $(LDFLAGS) -o $(APP_NAME)
 
 server: heketi
 
@@ -68,27 +82,28 @@ endif
 	echo "Installing vendor directory"
 	glide install -v
 
-	echo "Building dependencies to make builds faster"
-	go install github.com/heketi/heketi
-
 glide.lock: glide.yaml
 	echo "Glide.yaml has changed, updating glide.lock"
 	glide update -v
 
-client: glide.lock vendor
+client: vendor glide.lock
 	@$(MAKE) -C client/cli/go
 
 run: server
 	./$(APP_NAME)
 
-test: glide.lock vendor
-	go test $(GOFILES)
+test: vendor glide.lock
+	go test $(GOFILES)	# TODO: move this into a sub-test inside test/*.sh
+	./test.sh
 
 clean:
 	@echo Cleaning Workspace...
 	rm -rf $(APP_NAME)
 	rm -rf dist
 	@$(MAKE) -C client/cli/go clean
+
+clean_vendor:
+	rm -rf vendor
 
 $(PACKAGE): all
 	@echo Packaging Binaries...
@@ -117,6 +132,13 @@ $(CLIENT_PACKAGE): all
 	@echo
 	@echo Package $@ saved in dist directory
 
+deps_tarball: $(DEPS_TARBALL)
+
+$(DEPS_TARBALL): clean clean_vendor vendor glide.lock
+	@echo Creating dependency tarball...
+	@mkdir -p $(DIR)/dist/
+	tar -czf $@ -C vendor .
+
 dist: $(PACKAGE) $(CLIENT_PACKAGE)
 
 linux_amd64_dist:
@@ -131,8 +153,8 @@ linux_arm64_dist:
 darwin_amd64_dist:
 	GOOS=darwin GOARCH=amd64 $(MAKE) dist
 
-release: darwin_amd64_dist linux_arm64_dist linux_arm_dist linux_amd64_dist
+release: deps_tarball darwin_amd64_dist linux_arm64_dist linux_arm_dist linux_amd64_dist
 
 .PHONY: server client test clean name run version release \
         darwin_amd64_dist linux_arm_dist linux_amd64_dist linux_arm64_dist \
-        heketi
+        heketi clean_vendor deps_tarball
